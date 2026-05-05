@@ -1,0 +1,146 @@
+"RENOVACIONES /ADMSIONES- IVAN"
+/************************************************************ 
+ * CONFIGURACIÓN
+ ************************************************************/
+const NOMBRE_HOJA   = "RENOVACION 2026";
+const FILA_INICIAL  = 2;           // primera fila con datos
+const ANCHO_DATOS   = 14;          // A:N
+const FILAS_POR_BLOQUE = 120;      // <-- si sigue lento, bájalo a 80 o 60
+const CLAVE_ESTADO  = "RENOVACION2026_NEXT_ROW";
+
+// Presupuesto de tiempo por ejecución (en milisegundos).
+// Sugiero 55s para no solaparse con el siguiente minuto.
+// Si tu tiempo máximo permitido es mayor/menor, ajusta.
+const PRESUPUESTO_MS = 55 * 1000;
+
+/************************************************************
+ *  LÓGICA ORIGINAL (NO SE TOCA)
+ ************************************************************/
+function ejecutarLogica(hoja, valores, filaInicialMitad) {
+  for (let i = 0; i < valores.length; i++) {
+    const filaActual = filaInicialMitad + i;
+    const valorC = valores[i][2];       // Columna C
+    const valorN = valores[i][13];      // Columna N
+
+    const condicion1 = (valorC === valorN) && (valorC !== "");
+    const condicion2 = (valorC === "INTEGRACION ESCOLAR") &&
+      (valorN === "Modulo de Apoyo Integracion Escolar (con equipo)");
+
+    const valorNString = typeof valorN === 'string' ? valorN.toUpperCase() : '';
+    const empiezaConPrestacion = valorNString.startsWith("PRESTACION") && valorNString.includes(" DE ");
+
+    const condicion3 = (valorC === "TERAPIAS") &&
+      (valorN === "Modulo Integral Intensivo" || empiezaConPrestacion);
+
+    const celdaA = hoja.getRange(filaActual, 1);  // Columna A
+    const celdaH = hoja.getRange(filaActual, 8);  // Columna H
+
+    const formulaOriginalA = '=IFERROR(VLOOKUP($L' + filaActual + '; FORMS!D:F; 3; FALSE); "")';
+    const formulaOriginalH = '=IFERROR(VLOOKUP($L' + filaActual + '; FORMS!D:Q; 13; FALSE); "")';
+
+    let esNoEnA = false;
+
+    if (condicion1 || condicion2 || condicion3) {
+      celdaA.setValue("NO");
+      esNoEnA = true;
+    } else {
+      celdaA.setFormula(formulaOriginalA);
+      if (celdaA.getValue() === "NO") {
+        esNoEnA = true;
+      }
+    }
+
+    if (esNoEnA) {
+      celdaH.setValue("NO");
+    } else {
+      celdaH.setFormula(formulaOriginalH);
+    }
+  }
+}
+
+/************************************************************
+ * ENVOLTORIO CORTABLE: RESPETA LA LÓGICA Y CORTA POR TIEMPO
+ ************************************************************/
+function ejecutarLogicaCortable(hoja, inicio, fin, deadlineMs, props) {
+  let fila = inicio;
+
+  while (fila <= fin) {
+    // Si nos acercamos al límite de tiempo, guardamos progreso y salimos
+    if (Date.now() >= deadlineMs) {
+      props.setProperty(CLAVE_ESTADO, String(fila)); // retomar desde aquí
+      return { terminado: false, ultimaFilaProcesada: fila - 1 };
+    }
+
+    // Procesamos un sub-bloque pequeño para no leer toda la tanda si queda poco tiempo
+    const subTam = Math.min( Math.max(5, Math.floor(FILAS_POR_BLOQUE / 6)), fin - fila + 1 );
+    const valores = hoja.getRange(fila, 1, subTam, ANCHO_DATOS).getValues();
+    ejecutarLogica(hoja, valores, fila);
+
+    fila += subTam;
+  }
+
+  // Terminamos normalmente el bloque completo
+  props.setProperty(CLAVE_ESTADO, String(fin + 1));
+  return { terminado: true, ultimaFilaProcesada: fin };
+}
+
+/************************************************************
+ * PROCESAR SIGUIENTE BLOQUE (CON LOCK Y CORTE POR TIEMPO)
+ ************************************************************/
+function procesarSiguienteBloque() {
+  const lock = LockService.getScriptLock();
+  // Si otra ejecución está corriendo, salimos silenciosamente
+  if (!lock.tryLock(1)) return;
+
+  const t0 = Date.now();
+  const deadline = t0 + PRESUPUESTO_MS;
+
+  try {
+    const ss   = SpreadsheetApp.getActiveSpreadsheet();
+    const hoja = ss.getSheetByName(NOMBRE_HOJA);
+    if (!hoja) return;
+
+    const ultimaFila = hoja.getLastRow();
+    if (ultimaFila < FILA_INICIAL) return;
+
+    const props = PropertiesService.getScriptProperties();
+    let nextRow = Number(props.getProperty(CLAVE_ESTADO)) || FILA_INICIAL;
+
+    // Si ya pasamos el final, reiniciamos al principio
+    if (nextRow > ultimaFila) {
+      props.setProperty(CLAVE_ESTADO, String(FILA_INICIAL));
+      return;
+    }
+
+    // Determinar bloque a procesar
+    const finBloque = Math.min(nextRow + FILAS_POR_BLOQUE - 1, ultimaFila);
+
+    // Ejecutar la misma lógica, pero con corte si se acaba el tiempo
+    ejecutarLogicaCortable(hoja, nextRow, finBloque, deadline, props);
+
+  } catch (err) {
+    console.error("Error en procesarSiguienteBloque:", err);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/************************************************************
+ * TRIGGERS Y UTILIDADES
+ ************************************************************/
+function crearActivadorCadaMinuto() {
+  ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger("procesarSiguienteBloque").timeBased().everyMinutes(1).create();
+}
+
+function detenerActivadores() {
+  ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
+}
+
+function resetearEstado() {
+  PropertiesService.getScriptProperties().setProperty(CLAVE_ESTADO, String(FILA_INICIAL));
+}
+
+function correrUnaVez() {
+  procesarSiguienteBloque();
+}  

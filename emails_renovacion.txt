@@ -1,0 +1,134 @@
+/***** CONFIG - Emails Renovación (prefijo ER_) *****/
+const ER_SHEET_NAME      = 'RENOVACION 2026';
+const ER_HEADER_ROW      = 1;               // Fila de títulos por defecto (también autodetectamos)
+const ER_TARGET_HEADER   = 'RESP.';         // Columna con el responsable
+const ER_NOTIFIED_HEADER = 'NOTIFICADO';    // La creamos si falta
+
+// Responsables → email
+const ER_RESP_TO_EMAIL = {
+  'AGOS':  'agostina.pires@assistire.com.ar',
+  'MILI':  'milagros.orona@assistire.com.ar',
+  'TAMI':  'tamara.rolon@assistire.com.ar',
+  'ROMI':  'romina.favero@assistire.com.ar',
+  'LILI':  'liliana.gomez@assistire.com.ar',
+  'NANCY': 'nancy.ledezma@assistire.com.ar',
+  'IVAN':  'ivan.delatorre@assistire.com.ar',
+};
+const ER_FALLBACK_TO = 'ivan.delatorre@assistire.com.ar';
+
+/***** UTILS (con prefijo ER_) *****/
+const ER = {
+  norm(s){ return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toUpperCase(); },
+  esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); },
+  colByHeader(headers, name){
+    const want = ER.norm(name);
+    return headers.findIndex(h => ER.norm(h) === want) + 1; // 1-based (0 si no)
+  },
+  colLetter(n){
+    let s=''; while(n>0){const m=(n-1)%26; s=String.fromCharCode(65+m)+s; n=Math.floor((n-1)/26);} return s;
+  }
+};
+
+// Autodetecta la fila de encabezados buscando el título RESP. en las primeras filas
+function ER_headerRow(sh){
+  const max = Math.min(10, Math.max(ER_HEADER_ROW, sh.getLastRow()));
+  for (let r = 1; r <= max; r++){
+    const row = sh.getRange(r,1,1,sh.getLastColumn()).getValues()[0].map(ER.norm);
+    if (row.includes(ER.norm(ER_TARGET_HEADER))) return r;
+  }
+  return ER_HEADER_ROW; // fallback
+}
+
+/***** HANDLER: se dispara al editar (trigger instalable) *****/
+function er_onEditSendEmail(e){
+  try{
+    if (!e || !e.range) return;
+
+    const sh = e.range.getSheet();
+    if (!sh || sh.getName() !== ER_SHEET_NAME) return;
+
+    const headerRow = ER_headerRow(sh);
+    const row = e.range.getRow();
+    if (row <= headerRow) return; // no procesar títulos
+
+    const headers = sh.getRange(headerRow, 1, 1, sh.getLastColumn()).getValues()[0];
+    const colResp = ER.colByHeader(headers, ER_TARGET_HEADER);
+    if (!colResp || e.range.getColumn() !== colResp) return; // solo cuando editan RESP.
+
+    // Asegurar/crear NOTIFICADO
+    let colNotif = ER.colByHeader(headers, ER_NOTIFIED_HEADER);
+    if (!colNotif){
+      colNotif = headers.length + 1;
+      sh.getRange(headerRow, colNotif).setValue(ER_NOTIFIED_HEADER);
+    }
+
+    // Evitar duplicado (si querés re-enviar al cambiar RESP., borra el contenido en lugar de salir)
+    const ya = String(sh.getRange(row, colNotif).getDisplayValue()).toUpperCase();
+    if (ya === 'OK') return;
+
+    // Responsable → email
+    const resp = String(e.range.getDisplayValue()).trim();
+    if (!resp) return;
+    const to = ER_RESP_TO_EMAIL[resp] || ER_FALLBACK_TO;
+
+    // Datos por encabezado (ajusta si cambia el nombre en la hoja)
+    const col = (name)=>ER.colByHeader(headers, name);
+    const paciente = col('PACIENTE') ? sh.getRange(row, col('PACIENTE')).getDisplayValue() : '';
+    const dni      = col('DNI')      ? sh.getRange(row, col('DNI')).getDisplayValue()      : '';
+    const os       = col('O.S')      ? sh.getRange(row, col('O.S')).getDisplayValue()      : '';
+    const cPrest   = col('Prestacion') || col('Prestación');
+    const prest    = cPrest          ? sh.getRange(row, cPrest).getDisplayValue()          : '';
+    const cAut     = col('AUT.2025') || col('AUT 2025') || col('AUT. 2025');
+    const aut2025  = cAut            ? sh.getRange(row, cAut).getDisplayValue()            : '';
+
+    // Link directo a la fila
+    const ss   = SpreadsheetApp.getActiveSpreadsheet();
+    const gid  = sh.getSheetId();
+    const last = sh.getLastColumn();
+    const url  = `https://docs.google.com/spreadsheets/d/${ss.getId()}/edit#gid=${gid}&range=A${row}:${ER.colLetter(last)}${row}`;
+
+    const subject  = `RENOVACIÓN 2026 · Responsable ${resp} · ${paciente}`;
+    const textBody =
+`Se asignó el responsable "${resp}" en la hoja ${ER_SHEET_NAME}.
+
+Paciente: ${paciente}
+DNI: ${dni}
+Obra Social: ${os}
+Prestación: ${prest}
+Aut.2025: ${aut2025}
+
+Fila: ${row}
+Abrir fila: ${url}`;
+
+    const htmlBody = `
+      <p>Se asignó el responsable <b>"${ER.esc(resp)}"</b> en la hoja <b>${ER.esc(ER_SHEET_NAME)}</b>.</p>
+      <table border="0" cellpadding="4" cellspacing="0" style="border-collapse:collapse;">
+        <tr><td><b>Paciente:</b></td><td>${ER.esc(paciente)}</td></tr>
+        <tr><td><b>DNI:</b></td><td>${ER.esc(dni)}</td></tr>
+        <tr><td><b>Obra Social:</b></td><td>${ER.esc(os)}</td></tr>
+        <tr><td><b>Prestación:</b></td><td>${ER.esc(prest)}</td></tr>
+        <tr><td><b>Aut.2025:</b></td><td>${ER.esc(aut2025)}</td></tr>
+        <tr><td><b>Fila:</b></td><td>${row}</td></tr>
+      </table>
+      <p style="margin:12px 0;">
+        <a href="${url}" target="_blank" rel="noopener">🔗 Abrir esta fila en la hoja</a>
+      </p>
+      <p style="color:#666; font-size:12px; margin-top:12px;">
+        (Aviso generado automáticamente al editar la columna <b>${ER.esc(ER_TARGET_HEADER)}</b>)
+      </p>
+    `;
+
+    MailApp.sendEmail({ to, subject, body: textBody, htmlBody });
+    sh.getRange(row, colNotif).setValue('OK'); // marcar enviado
+  }catch(err){
+    console.error('Error er_onEditSendEmail:', err);
+  }
+}
+
+/***** INSTALAR TRIGGER (una sola vez) *****/
+function er_instalarTrigger(){
+  ScriptApp.newTrigger('er_onEditSendEmail')
+    .forSpreadsheet(SpreadsheetApp.getActive()) // estamos dentro de la hoja
+    .onEdit()
+    .create();
+}

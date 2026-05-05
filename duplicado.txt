@@ -1,0 +1,61 @@
+const FORM_ID = 'PON_AQUI_TU_FORM_ID';        // .../forms/d/FORM_ID/edit
+const SPREADSHEET_ID = 'PON_AQUI_TU_SHEET_ID';// .../spreadsheets/d/SHEET_ID/edit
+const SHEET_NAME = 'FORMS';                   // pestaña con las respuestas
+
+function onFormSubmit(e) {
+  // Requiere trigger "From spreadsheet - On form submit"
+  const sh = e.range.getSheet();
+  const r  = e.range.getRow();
+  procesarFila_(sh, r);
+}
+
+// Para probar manualmente desde un proyecto standalone
+function debugUltimaFila() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sh = SHEET_NAME ? ss.getSheetByName(SHEET_NAME) : ss.getSheets()[0];
+  const r  = sh.getLastRow();
+  procesarFila_(sh, r);
+}
+
+function procesarFila_(sh, r) {
+  const TS_COL = 1;  // A
+  const RENUEVA_COL_YN = 6; // F
+  const RENUEVA_COL = 7;    // G
+  const BAJA_COL = 8;       // H
+
+  const norm = s => String(s || '')
+    .toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+
+  const toTokens = s => norm(s)
+    .replace(/\s+y\s+/g, ',').replace(/\s*&\s*/g, ',').replace(/\//g, ',')
+    .split(',').map(x=>x.trim()).filter(Boolean).map(alias);
+
+  function alias(t){
+    if (t.includes('integracion')) return 'integracion escolar';
+    if (t.includes('terapia'))     return 'terapias';
+    return t;
+  }
+
+  const yn = norm(sh.getRange(r, RENUEVA_COL_YN).getValue());
+  const renSet = new Set(toTokens(sh.getRange(r, RENUEVA_COL).getValue()));
+  const bajaAll= new Set(toTokens(sh.getRange(r, BAJA_COL).getValue()));
+
+  const nada = new Set(['ninguna','ninguno','no','n/a','na','']);
+  const bajaSet = new Set([...bajaAll].filter(x => !nada.has(x)));
+
+  if (yn !== 'si' || renSet.size === 0 || bajaSet.size === 0) return;
+
+  const hayChoque = [...bajaSet].some(x => renSet.has(x));
+  if (!hayChoque) return;
+
+  const ts = new Date(sh.getRange(r, TS_COL).getValue());
+  const form = FormApp.openById(FORM_ID);
+  const windowMs = 5 * 60 * 1000;
+
+  const [resp] = form
+    .getResponses(new Date(ts - windowMs), new Date(ts + windowMs))
+    .filter(x => x.getTimestamp().getTime() === ts.getTime());
+
+  sh.deleteRow(r);
+  if (resp) form.deleteResponse(resp.getId()); // opcional
+}
