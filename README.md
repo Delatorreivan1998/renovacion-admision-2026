@@ -1,7 +1,7 @@
 # renovacion-admision-2026
 Automatización de renovaciones y admisiones 2026 - Google Apps Script
 # 🔄 Sistema de Renovación y Admisión 2026
-**Assistire - Centro de Rehabilitación Integral**
+**Assistire - Centro de Rehabilitación Integral (Centro)**
 
 Automatización completa del proceso de renovación de prestaciones 2026, desarrollada en Google Apps Script sobre Google Sheets. El sistema procesa miles de filas evaluando condiciones de cobertura y aplica resultados automáticamente, respetando los límites de ejecución de Google.
 
